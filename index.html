@@ -1,0 +1,1251 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>世界地図クイズマスター | 中学校地理学習アプリ</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- D3.js (v7) & TopoJSON Client CDN -->
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script src="https://unpkg.com/topojson-client@3"></script>
+    <!-- 紙吹雪エフェクト (Canvas Confetti) -->
+    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+    <!-- FontAwesome アイコンライブラリ -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+    
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=M+PLUS+Rounded+1c:wght@400;700;800;900&display=swap');
+        
+        body {
+            font-family: 'M PLUS Rounded 1c', sans-serif;
+            user-select: none;
+            -webkit-user-select: none;
+            background-color: #f8fafc;
+            touch-action: manipulation;
+        }
+
+        /* SVG マップ描画エリア */
+        #d3MapSvg {
+            width: 100%;
+            height: 100%;
+            display: block;
+            background-color: #bae6fd; /* 2D平面地図時の海洋カラー */
+            border-radius: 1rem;
+            cursor: grab;
+            touch-action: none; /* タッチピンチ・ドラッグ用 */
+        }
+        #d3MapSvg:active {
+            cursor: grabbing;
+        }
+
+        /* 国の形状スタイル */
+        .country-path {
+            fill: #fef08a; /* 明るいパステルイエロー */
+            stroke: #1e293b; /* くっきりとした黒色の国境線 */
+            stroke-width: 0.8px;
+            vector-effect: non-scaling-stroke;
+            transition: fill 0.2s ease, stroke 0.2s ease;
+        }
+        .country-path:hover {
+            fill: #fde047;
+        }
+
+        /* 出題国の赤色点滅ハイライト（線が太く潰れない vector-effect 設定） */
+        .target-country-highlight {
+            fill: #ef4444 !important;
+            stroke: #dc2626 !important;
+            stroke-width: 1.2px !important;
+            vector-effect: non-scaling-stroke !important;
+            animation: targetBlink 1.2s infinite ease-in-out;
+        }
+
+        @keyframes targetBlink {
+            0% {
+                fill-opacity: 0.5;
+                stroke-opacity: 0.7;
+            }
+            50% {
+                fill-opacity: 0.9;
+                stroke-opacity: 1;
+            }
+            100% {
+                fill-opacity: 0.5;
+                stroke-opacity: 0.7;
+            }
+        }
+
+        /* バチカン市国用：ローマ位置の点滅マーカー */
+        .rome-blinking-group {
+            animation: romeBlink 0.8s infinite alternate ease-in-out;
+        }
+
+        @keyframes romeBlink {
+            0% { opacity: 0.2; transform: scale(0.9); }
+            100% { opacity: 1; transform: scale(1.1); }
+        }
+
+        /* 3D地球儀時の海洋球体背景 */
+        .sphere-ocean {
+            fill: #38bdf8;
+            stroke: #0284c7;
+            stroke-width: 1.5px;
+        }
+
+        /* ボタンアニメーション */
+        .btn-push {
+            transition: transform 0.1s ease, box-shadow 0.1s ease;
+        }
+        .btn-push:active {
+            transform: scale(0.96);
+        }
+
+        /* スクロールバー装飾 */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f5f9;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8;
+        }
+    </style>
+</head>
+<body class="text-slate-800 min-h-screen flex flex-col justify-between">
+
+    <header class="bg-indigo-600 text-white shadow-md py-3 px-4 md:px-8 flex justify-between items-center sticky top-0 z-50">
+        <div class="flex items-center gap-3">
+            <div class="bg-yellow-400 text-indigo-900 p-2 rounded-xl text-xl font-black shadow-sm">
+                <i class="fa-solid fa-earth-americas"></i>
+            </div>
+            <div>
+                <h1 class="text-lg md:text-2xl font-black tracking-wide">世界地図クイズマスター</h1>
+                <p class="text-xs text-indigo-200 hidden sm:block">中学校社会科（地理）学習支援 Webアプリ</p>
+            </div>
+        </div>
+
+        <div class="flex items-center gap-2 md:gap-3">
+            <button id="soundToggleBtn" onclick="toggleSound()" class="bg-indigo-700 hover:bg-indigo-800 text-white px-3 py-2 rounded-xl text-xs md:text-sm flex items-center gap-1.5 font-bold btn-push border border-indigo-500">
+                <i id="soundIcon" class="fa-solid fa-volume-high"></i>
+                <span class="hidden md:inline">効果音</span>
+            </button>
+            <button onclick="showHomeMenu()" class="bg-yellow-400 hover:bg-yellow-300 text-indigo-950 px-3.5 md:px-4 py-2 rounded-xl text-xs md:text-sm font-extrabold shadow btn-push flex items-center gap-1.5 border border-yellow-500">
+                <i class="fa-solid fa-house"></i>
+                <span>メニュー</span>
+            </button>
+        </div>
+    </header>
+
+    <main class="flex-1 max-w-7xl w-full mx-auto p-3 md:p-6 flex flex-col justify-center">
+
+        <!-- ================= 1. メニュー画面（初期表示） ================= -->
+        <div id="homeScreen" class="bg-white rounded-3xl shadow-xl p-6 md:p-10 border-4 border-indigo-100 max-w-3xl mx-auto w-full transition-all">
+            <div class="text-center mb-8">
+                <span class="bg-rose-100 text-rose-700 px-4 py-1.5 rounded-full text-xs md:text-sm font-black tracking-wider inline-flex items-center gap-1.5 shadow-sm">
+                    <i class="fa-solid fa-bolt"></i> 一発アウト！サドンデス
+                </span>
+                <h2 class="text-2xl md:text-4xl font-black text-slate-800 mt-3 tracking-tight">全世界パーフェクトチャレンジ！</h2>
+                <p class="text-slate-600 mt-2 text-sm md:text-base leading-relaxed">
+                    地図上で赤く点滅している国名を答えよう！<br>
+                    <span class="text-rose-600 font-black">※ 1問でも間違えると即チャレンジ失敗！</span>
+                </p>
+            </div>
+
+            <!-- 操作説明カード -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+                <div class="bg-indigo-50/70 border-2 border-indigo-200 p-5 rounded-2xl flex items-center gap-4 shadow-sm">
+                    <div class="w-12 h-12 bg-indigo-600 text-white rounded-xl flex items-center justify-center text-xl shadow flex-shrink-0">
+                        <i class="fa-solid fa-keyboard"></i>
+                    </div>
+                    <div>
+                        <h3 class="font-bold text-slate-800 text-sm md:text-base">キーボード入力</h3>
+                        <p class="text-xs text-slate-600 mt-0.5 leading-relaxed">カタカナ・ひらがな・略称（アメリカ等）・正式名称（メキシコ合衆国等）に対応！Enterキーで素早く解答できます。</p>
+                    </div>
+                </div>
+
+                <div class="bg-emerald-50/70 border-2 border-emerald-200 p-5 rounded-2xl flex items-center gap-4 shadow-sm">
+                    <div class="w-12 h-12 bg-emerald-600 text-white rounded-xl flex items-center justify-center text-xl shadow flex-shrink-0">
+                        <i class="fa-solid fa-microphone"></i>
+                    </div>
+                    <div>
+                        <h3 class="font-bold text-slate-800 text-sm md:text-base">マイク音声入力</h3>
+                        <p class="text-xs text-slate-600 mt-0.5 leading-relaxed">「マイクボタン」を押して国名を話すと、自動で音声認識して回答できます。</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- スタートボタン -->
+            <button id="startChallengeBtn" onclick="startGame()" class="w-full bg-emerald-500 hover:bg-emerald-600 text-white font-black text-lg md:text-xl py-4 rounded-2xl shadow-lg transition transform hover:-translate-y-0.5 active:translate-y-0 flex items-center justify-center gap-2 btn-push border-b-4 border-emerald-700">
+                <i class="fa-solid fa-play"></i> <span id="startBtnText">20問チャレンジスタート！</span>
+            </button>
+
+            <!-- 教師用設定メニューボタン (右下) -->
+            <div class="mt-6 flex justify-end">
+                <button onclick="openTeacherAuthModal()" class="inline-flex items-center gap-2 text-xs text-slate-500 hover:text-indigo-600 bg-slate-100 hover:bg-indigo-50 border border-slate-300 hover:border-indigo-300 font-bold px-3.5 py-2 rounded-xl transition btn-push">
+                    <i class="fa-solid fa-user-gear"></i>
+                    <span>教師用設定メニュー</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- ================= 2. ゲーム画面 ================= -->
+        <div id="gameScreen" class="hidden flex-1 flex-col gap-4">
+            
+            <!-- ステータスバー -->
+            <div class="bg-white rounded-2xl shadow-sm p-3 md:p-4 flex justify-between items-center border border-slate-200">
+                <div class="flex items-center gap-2 md:gap-4">
+                    <span id="questionCountBadge" class="bg-indigo-100 text-indigo-900 font-black text-sm md:text-base px-3 py-1 rounded-xl">
+                        第 <span id="currentQNum">1</span> / <span class="totalQNumDisplay">20</span> 問
+                    </span>
+                    <span class="bg-rose-100 text-rose-700 font-extrabold text-xs md:text-sm px-3 py-1 rounded-xl">
+                        <i class="fa-solid fa-skull"></i> 1ミスで即終了
+                    </span>
+                </div>
+
+                <div class="flex items-center gap-2">
+                    <div class="text-right">
+                        <span class="text-xs text-slate-500 block font-bold">正解数</span>
+                        <span id="scoreDisplay" class="text-xl md:text-2xl font-black text-emerald-600">0</span>
+                        <span class="text-xs font-bold text-slate-500"> / <span class="totalQNumDisplay">20</span></span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- メインゲームエリア（D3.js地図 + クイズ操作部） -->
+            <div class="grid grid-cols-1 lg:grid-cols-12 gap-4 flex-1 min-h-[480px]">
+                
+                <!-- 世界地図表示エリア (D3.js) -->
+                <div class="lg:col-span-7 bg-white rounded-2xl shadow-sm p-2 border border-slate-200 flex flex-col min-h-[340px] md:min-h-[460px] relative overflow-hidden">
+                    
+                    <!-- マップモード切替ボタン -->
+                    <div class="absolute top-4 left-4 z-20 bg-white/90 backdrop-blur-md p-1 rounded-xl shadow border border-slate-200 flex gap-1">
+                        <button id="mapMode2D" onclick="switchMapMode('2d')" class="px-3 py-1.5 rounded-lg text-xs font-black transition flex items-center gap-1 bg-indigo-600 text-white shadow">
+                            <i class="fa-solid fa-map"></i> 平面地図 (2D)
+                        </button>
+                        <button id="mapMode3D" onclick="switchMapMode('3d')" class="px-3 py-1.5 rounded-lg text-xs font-black transition flex items-center gap-1 bg-slate-100 text-slate-700 hover:bg-slate-200">
+                            <i class="fa-solid fa-globe"></i> 3D地球儀
+                        </button>
+                    </div>
+
+                    <!-- D3.js SVG 地図コンテナ -->
+                    <div class="w-full h-full rounded-xl overflow-hidden relative">
+                        <svg id="d3MapSvg"></svg>
+                    </div>
+
+                    <div class="absolute bottom-3 left-3 z-20 bg-white/90 backdrop-blur-sm px-2.5 py-1.5 rounded-lg text-xs font-bold text-slate-600 shadow border">
+                        <i class="fa-solid fa-hand-pointer text-indigo-600"></i> ドラッグで移動、スクロール/ピンチで拡大縮小
+                    </div>
+                </div>
+
+                <!-- クイズ解答操作エリア -->
+                <div class="lg:col-span-5 bg-white rounded-2xl shadow-sm p-4 md:p-6 border border-slate-200 flex flex-col justify-between">
+                    
+                    <div>
+                        <!-- 出題指示プロンプト -->
+                        <div class="bg-slate-50 border border-slate-200 rounded-2xl p-4 mb-5 text-center">
+                            <span class="text-xs font-black text-indigo-600 uppercase tracking-widest block">Question</span>
+                            <h3 id="questionPrompt" class="text-lg md:text-xl font-black text-slate-800 mt-1">
+                                赤く点滅している国名を答えてね！
+                            </h3>
+                        </div>
+
+                        <!-- 入力フォーム＆音声入力 -->
+                        <div class="space-y-3">
+                            <form onsubmit="handleFormSubmit(event)" class="flex gap-2">
+                                <input type="text" id="answerInput" placeholder="国名を入力（ひらがな可）" autocomplete="off" class="flex-1 bg-slate-50 border-2 border-indigo-200 focus:border-indigo-600 focus:bg-white text-base md:text-lg font-bold px-4 py-3 rounded-xl outline-none transition">
+                                <button type="submit" class="bg-indigo-600 hover:bg-indigo-700 text-white font-black px-5 rounded-xl shadow btn-push">
+                                    解答
+                                </button>
+                            </form>
+
+                            <!-- 音声入力ボタン -->
+                            <button id="voiceBtn" onclick="toggleVoiceRecognition()" type="button" class="w-full bg-slate-100 hover:bg-emerald-50 text-slate-700 hover:text-emerald-700 border-2 border-slate-200 hover:border-emerald-400 font-bold py-3.5 px-4 rounded-xl transition flex items-center justify-center gap-2 shadow-sm">
+                                <i id="voiceIcon" class="fa-solid fa-microphone text-rose-500 text-lg"></i>
+                                <span id="voiceStatusText">音声で答える（マイク起動）</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 正解時の豆知識・解説フィードバック -->
+                    <div id="feedbackBox" class="hidden mt-4 p-4 rounded-2xl border-2 border-emerald-300 bg-emerald-50 text-center transition-all">
+                        <div id="feedbackResult" class="text-lg md:text-xl font-black text-emerald-800 mb-1 flex items-center justify-center gap-1.5">
+                            <i class="fa-solid fa-circle-check text-emerald-600"></i> 正解！
+                        </div>
+                        <p id="feedbackDetail" class="text-xs md:text-sm font-bold text-slate-700 mb-3 text-left bg-white p-3 rounded-xl border border-emerald-200 leading-relaxed"></p>
+                        <button id="nextBtn" onclick="nextQuestion()" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-black py-3 rounded-xl text-sm shadow btn-push flex items-center justify-center gap-2">
+                            次の問題へ (あと <span id="remainingQCount">19</span> 問) <i class="fa-solid fa-arrow-right"></i>
+                        </button>
+                    </div>
+
+                </div>
+            </div>
+        </div>
+
+        <!-- ================= 3. チャレンジ失敗（ゲームオーバー）画面 ================= -->
+        <div id="gameOverScreen" class="hidden bg-white rounded-3xl shadow-xl p-6 md:p-10 border-4 border-rose-200 max-w-2xl mx-auto w-full text-center">
+            <div class="inline-block bg-rose-100 text-rose-600 p-4 rounded-full text-4xl mb-3 shadow-inner">
+                💥
+            </div>
+            <h2 class="text-2xl md:text-3xl font-black text-slate-800">残念！チャレンジ失敗...</h2>
+            <p class="text-slate-500 font-bold mt-1 text-sm">一問でも間違えるとゲームオーバーです！</p>
+
+            <div class="my-6 bg-slate-50 border-2 border-rose-200 rounded-2xl p-5 text-left space-y-2.5">
+                <div class="text-xs font-bold text-rose-500 uppercase tracking-wider flex items-center gap-1">
+                    <i class="fa-solid fa-circle-xmark"></i> 間違えた問題 (第 <span id="failedQNum">1</span> 問)
+                </div>
+                <div class="text-xl font-black text-slate-800">
+                    正解： <span id="correctAnswerName" class="text-emerald-600">アメリカ合衆国</span>
+                </div>
+                <div class="text-sm font-bold text-slate-600">
+                    あなたの回答： <span id="userWrongAnswer" class="text-rose-600">カナダ</span>
+                </div>
+                <div class="mt-3 pt-3 border-t border-slate-200 text-xs md:text-sm font-bold text-slate-600 leading-relaxed" id="failedTrivia">
+                    【解説】...
+                </div>
+            </div>
+
+            <!-- ボタン群 -->
+            <div class="flex flex-col sm:flex-row gap-3">
+                <button onclick="startGame()" class="flex-1 bg-emerald-500 hover:bg-emerald-600 text-white font-black py-3.5 rounded-xl shadow btn-push">
+                    <i class="fa-solid fa-rotate-right"></i> もう一度挑戦する
+                </button>
+                <button onclick="showHomeMenu()" class="flex-1 bg-slate-200 hover:bg-slate-300 text-slate-800 font-extrabold py-3.5 rounded-xl shadow btn-push">
+                    <i class="fa-solid fa-house"></i> メニューへ戻る
+                </button>
+            </div>
+        </div>
+
+        <!-- ================= 4. 全問正解クリア画面 ================= -->
+        <div id="resultScreen" class="hidden bg-white rounded-3xl shadow-xl p-6 md:p-10 border-4 border-yellow-200 max-w-2xl mx-auto w-full text-center">
+            <div class="inline-block bg-yellow-100 text-yellow-800 p-4 rounded-full text-4xl mb-3 shadow-inner">
+                👑
+            </div>
+            <h2 class="text-2xl md:text-3xl font-black text-slate-800">完全制覇！おめでとうございます！</h2>
+            <p class="text-slate-500 font-bold mt-1 text-sm">全<span class="totalQNumDisplay">20</span>問ノーミスクリア達成！</p>
+
+            <!-- スコア表示カード -->
+            <div class="my-6 bg-gradient-to-r from-yellow-500 to-amber-600 text-white rounded-2xl p-6 shadow-lg">
+                <span class="text-xs font-bold opacity-90 uppercase tracking-widest block">PERFECT CLEAR!</span>
+                <div class="text-4xl md:text-5xl font-black mt-2">
+                    <span class="totalQNumDisplay">20</span> / <span class="totalQNumDisplay">20</span> <span class="text-xl">問正解</span>
+                </div>
+            </div>
+
+            <!-- 称賛メッセージ -->
+            <div class="bg-yellow-50 border border-yellow-200 rounded-2xl p-4 mb-6">
+                <h4 class="text-base md:text-lg font-black text-amber-900 mb-1">🌟 完璧な世界地理マスター！</h4>
+                <p class="text-xs md:text-sm text-slate-600 font-bold leading-relaxed">素晴らしい地理知識と暗記力です！完璧に世界の位置と国名を把握できています！</p>
+            </div>
+
+            <!-- ボタン群 -->
+            <div class="flex flex-col sm:flex-row gap-3">
+                <button onclick="startGame()" class="flex-1 bg-emerald-500 hover:bg-emerald-600 text-white font-black py-3.5 rounded-xl shadow btn-push">
+                    <i class="fa-solid fa-rotate-right"></i> もう一度挑戦する
+                </button>
+                <button onclick="showHomeMenu()" class="flex-1 bg-slate-200 hover:bg-slate-300 text-slate-800 font-extrabold py-3.5 rounded-xl shadow btn-push">
+                    <i class="fa-solid fa-house"></i> メニューへ戻る
+                </button>
+            </div>
+        </div>
+
+    </main>
+
+    <!-- ================= 5. 教師用パスワード認証モーダル ================= -->
+    <div id="teacherAuthModal" class="hidden fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div class="bg-white rounded-3xl shadow-2xl p-6 md:p-8 max-w-md w-full border-4 border-indigo-200 text-center">
+            <div class="w-14 h-14 bg-indigo-100 text-indigo-700 rounded-2xl flex items-center justify-center text-2xl mx-auto mb-3 shadow-inner">
+                <i class="fa-solid fa-lock"></i>
+            </div>
+            <h3 class="text-xl font-black text-slate-800">教師用管理者メニュー</h3>
+            <p class="text-xs text-slate-500 font-bold mt-1 mb-6">出題設定を変更するにはパスワードを入力してください。</p>
+
+            <form onsubmit="handleTeacherAuth(event)" class="space-y-4">
+                <div>
+                    <input type="password" id="teacherPassInput" placeholder="パスワードを入力" autocomplete="off" class="w-full text-center text-2xl tracking-widest font-bold bg-slate-50 border-2 border-indigo-200 focus:border-indigo-600 focus:bg-white px-4 py-3 rounded-xl outline-none transition">
+                    <p id="authErrorMsg" class="hidden text-xs font-bold text-rose-500 mt-2"><i class="fa-solid fa-triangle-exclamation"></i> パスワードが違います</p>
+                </div>
+
+                <div class="flex gap-2">
+                    <button type="button" onclick="closeTeacherAuthModal()" class="flex-1 bg-slate-200 hover:bg-slate-300 text-slate-700 font-extrabold py-3 rounded-xl btn-push text-sm">
+                        キャンセル
+                    </button>
+                    <button type="submit" class="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold py-3 rounded-xl btn-push text-sm shadow">
+                        ログイン
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- ================= 6. 教師用設定画面モーダル ================= -->
+    <div id="teacherConfigModal" class="hidden fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div class="bg-white rounded-3xl shadow-2xl p-6 md:p-8 max-w-3xl w-full border-4 border-indigo-200 max-h-[90vh] flex flex-col">
+            <div class="flex justify-between items-center pb-4 border-b border-slate-200 mb-4">
+                <div class="flex items-center gap-3">
+                    <div class="bg-indigo-600 text-white p-2.5 rounded-xl font-bold">
+                        <i class="fa-solid fa-sliders"></i>
+                    </div>
+                    <div>
+                        <h3 class="text-xl font-black text-slate-800">出題管理設定 (教師用)</h3>
+                        <p class="text-xs text-slate-500 font-bold">出題数や優先指定する国を設定できます</p>
+                    </div>
+                </div>
+                <button onclick="closeTeacherConfigModal()" class="text-slate-400 hover:text-slate-600 p-2 text-xl font-bold">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+
+            <div class="overflow-y-auto flex-1 space-y-6 pr-1">
+                <!-- 設定1: 問題数の設定 -->
+                <div class="bg-indigo-50 border border-indigo-100 rounded-2xl p-4">
+                    <label class="block font-black text-slate-800 text-sm mb-1">
+                        <i class="fa-solid fa-list-ol text-indigo-600"></i> 出題数の変更 (1 〜 48 問)
+                    </label>
+                    <p class="text-xs text-slate-500 font-bold mb-3">1回のゲームでランダム出題する問題数を設定します。</p>
+                    <div class="flex items-center gap-4">
+                        <input type="range" id="qCountRange" min="1" max="48" value="20" oninput="updateQCountValue(this.value)" class="flex-1 accent-indigo-600 cursor-pointer h-2 bg-indigo-200 rounded-lg">
+                        <span class="bg-white border-2 border-indigo-200 font-black text-indigo-900 text-lg px-4 py-1.5 rounded-xl min-w-[80px] text-center">
+                            <span id="qCountValue">20</span> 問
+                        </span>
+                    </div>
+                </div>
+
+                <!-- 設定2: 確定出題国の指定 -->
+                <div>
+                    <div class="flex justify-between items-end mb-2">
+                        <div>
+                            <label class="font-black text-slate-800 text-sm block">
+                                <i class="fa-solid fa-thumbtack text-rose-500"></i> 必ず出題する国（優先指定）
+                            </label>
+                            <p class="text-xs text-slate-500 font-bold">タップして選択した国は、ゲーム開始時に優先的に必ず出題されます。</p>
+                        </div>
+                        <div class="text-right">
+                            <span class="text-xs font-bold text-slate-600">指定数: <span id="priorityCountBadge" class="text-indigo-600 font-black">0</span> / <span id="maxPriorityDisplay">20</span> か国</span>
+                        </div>
+                    </div>
+
+                    <div class="flex gap-2 mb-3">
+                        <button onclick="selectAllPriorityCountries()" class="text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1.5 rounded-lg border btn-push">
+                            全選択
+                        </button>
+                        <button onclick="clearAllPriorityCountries()" class="text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1.5 rounded-lg border btn-push">
+                            全解除
+                        </button>
+                    </div>
+
+                    <!-- 48か国選択ボタンリスト -->
+                    <div id="countriesSelectionGrid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 border border-slate-200 rounded-2xl p-3 bg-slate-50 max-h-64 overflow-y-auto">
+                        <!-- JSで動的にボタン生成 -->
+                    </div>
+                </div>
+            </div>
+
+            <div class="pt-4 border-t border-slate-200 mt-4 flex justify-end gap-2">
+                <button onclick="saveTeacherConfig()" class="bg-emerald-500 hover:bg-emerald-600 text-white font-black px-6 py-3 rounded-xl shadow btn-push text-sm flex items-center gap-2">
+                    <i class="fa-solid fa-check"></i> 設定を保存して適用
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // かめさんプリント１ー②国名完全準拠（全48か国・正式名称・ひらがな・略称対応）
+        const countriesData = [
+            { iso: "826", name: 'イギリス', lat: 55.3781, lng: -3.4360, zoom: 4, aliases: ['イギリス', 'いぎりす', '英国', 'えいこく', 'ユナイテッドキングダム', 'グレートブリテン及び北アイルランド連合王国', 'グレートブリテンおよび北アイルランド連合王国'], trivia: '経度0度の本初子午線は、この国の首都ロンドンを通る。お金の単位はポンド。2020年に正式にEUから離脱した。' },
+            { iso: "578", name: 'ノルウェー', lat: 60.4720, lng: 8.4689, zoom: 4, aliases: ['ノルウェー', 'のるうぇー', 'ノルウェー王国'], trivia: 'スカンディナビア半島にはフィヨルドという地形がみられる。夏の時期、夜でも太陽が沈まない白夜がみられる。' },
+            { iso: "752", name: 'スウェーデン', lat: 60.1282, lng: 18.6435, zoom: 4, aliases: ['スウェーデン', 'すうぇーでん', 'スウェーデン王国'], trivia: '消費税 25%!?だが、社会保障が充実している国。ノーベル賞の授賞式が行われる。家具屋のIKEAはここが発祥。' },
+            { iso: "246", name: 'フィンランド', lat: 61.9241, lng: 25.7482, zoom: 4, aliases: ['フィンランド', 'ふぃんらんど', 'フィンランド共和国'], trivia: '森と湖の国。サウナに入る文化がある。サンタクロースやムーミンで有名な国。世界一の教育水準とよばれる。' },
+            { iso: "620", name: 'ポルトガル', lat: 39.3999, lng: -8.2245, zoom: 5, aliases: ['ポルトガル', 'ぽるとがる', 'ポルトガル共和国'], trivia: '大航海時代には、バスコ・ダ・ガマやマゼランがこの地から世界へ航海。ブラジルはこの国の言葉を話し、「カステラ」の語源にもなる。' },
+            { iso: "724", name: 'スペイン', lat: 40.4637, lng: -3.7492, zoom: 5, aliases: ['スペイン', 'すぺいん', 'スペイン王国'], trivia: 'イベリア半島に位置する「情熱の国」。フラメンコと闘牛、サッカー、トマト祭りに熱い! 未完成の世界遺産のサグラダ・ファミリアが有名。' },
+            { iso: "250", name: 'フランス', lat: 46.2276, lng: 2.2137, zoom: 5, aliases: ['フランス', 'ふらんす', 'フランス共和国'], trivia: 'EU最大の農業国。小麦の輸出がさかん。ヨーロッパ各地から部品を集めた飛行機の組み立て工場があるため、航空機の輸出が多い。' },
+            { iso: "528", name: 'オランダ', lat: 52.1326, lng: 5.2913, zoom: 6, aliases: ['オランダ', 'おらんだ', 'オランダ王国'], trivia: '海より低い土地を干拓したポルダーでの風車とチューリップ栽培が有名。ハウステンボスはこの国の街並みを再現している。' },
+            { iso: "276", name: 'ドイツ', lat: 51.1657, lng: 10.4515, zoom: 5, aliases: ['ドイツ', 'どいつ', 'ドイツ連邦共和国'], trivia: 'EU最大の工業国。ルール工業地域がある。BMW、ベンツなどの自動車生産がさかん。「ライ麦パン」「ソーセージ」「ビール」が食卓に並ぶ。' },
+            { iso: "756", name: 'スイス', lat: 46.8182, lng: 8.2275, zoom: 6, aliases: ['スイス', 'すいす', 'スイス連邦'], trivia: 'アルプス山脈があり、永世中立国。上から呼んでも下から呼んでも同じ国名。アルプスの少女ハイジのモデルとなった。' },
+            { iso: "336", name: 'バチカン市国', lat: 41.9029, lng: 12.4534, zoom: 7, aliases: ['バチカン', 'ばちかん', 'バチカン市国', 'ばちかんしこく'], trivia: 'イタリアの首都ローマの中にある世界で最も面積が狭い国で、広さは春日公園1.5個分。キリスト教カトリック教会の総本山。' },
+            { iso: "380", name: 'イタリア', lat: 41.8719, lng: 12.5674, zoom: 5, aliases: ['イタリア', 'いたりあ', 'イタリア共和国'], trivia: 'ブーツの形をした国。地中海式農業がさかんで、オリーブとぶどうの生産は世界2位。「パスタ」「ピザ」がbuono! (おいしい!)' },
+            { iso: "300", name: 'ギリシャ', lat: 39.0742, lng: 21.8243, zoom: 5, aliases: ['ギリシャ', 'ぎりしゃ', 'ギリシア', 'ギリシャ共和国', 'ギリシア共和国'], trivia: '2000年以上前から文明が栄えた。オリンピックが始まった土地。今でも聖火リレーは、この国からスタートする。' },
+            { iso: "643", name: 'ロシア', lat: 61.5240, lng: 105.3188, zoom: 2, aliases: ['ロシア', 'ろしあ', 'ロシア連邦'], trivia: 'アジア・ヨーロッパにまたがり、世界一面積が大きい国。かつて、ソ連という社会主義の国だった。2022年にウクライナへ侵攻･･･。' },
+            { iso: "792", name: 'トルコ', lat: 38.9637, lng: 35.2433, zoom: 5, aliases: ['トルコ', 'とるこ', 'トルコ共和国'], trivia: 'ヨーロッパとアジアをつなぐ位置にある。イスラム教徒が多い。有名なケバブは羊の肉。イスラム教徒は豚肉を食べないよ。' },
+            { iso: "012", name: 'アルジェリア', lat: 28.0339, lng: 1.6596, zoom: 4, aliases: ['アルジェリア', 'あるじぇりあ', 'アルジェリア民主人民共和国'], trivia: 'アフリカ州で国土面積が最も広い国。8割以上はサハラ砂漠。主に原油を輸出していて、OPECにも加盟している。' },
+            { iso: "818", name: 'エジプト', lat: 26.8206, lng: 30.8025, zoom: 5, aliases: ['エジプト', 'えじぷと', 'エジプト・アラブ共和国', 'エジプトアラブ共和国'], trivia: 'かつてイギリスの植民地だった。ナイル川の河口にあり、かつて文明がさかえ、ピラミッドとスフィンクスで有名な国。' },
+            { iso: "384", name: 'コートジボワール', lat: 7.5400, lng: -5.5471, zoom: 5, aliases: ['コートジボワール', 'こーとじぼわーる', '象牙海岸', 'コートジボワール共和国'], trivia: 'カカオ豆の生産量は世界一。国名は、フランス語で「象牙海岸」。植民地時代は、象牙と奴隷の売買がたくさん行われた歴史をもつ。' },
+            { iso: "288", name: 'ガーナ', lat: 7.9465, lng: -1.0232, zoom: 6, aliases: ['ガーナ', 'がーな', 'ガーナ共和国'], trivia: '板チョコの名前にもなっているギニア湾岸の国で、日本がカカオ豆を一番輸入している国。金の輸出もさかん。' },
+            { iso: "566", name: 'ナイジェリア', lat: 9.0820, lng: 8.6753, zoom: 5, aliases: ['ナイジェリア', 'ないじぇりあ', 'ナイジェリア連邦共和国'], trivia: 'ギニア湾岸の国で、人口2億人で世界7位。原油の輸出に頼るモノカルチャー経済の国。' },
+            { iso: "231", name: 'エチオピア', lat: 9.1450, lng: 40.4897, zoom: 5, aliases: ['エチオピア', 'えちおぴあ', 'エチオピア連邦民主共和国'], trivia: 'イタリアに数年占領されたが、アフリカで最も古い独立国。食料不足に悩まされている。コーヒー豆の生産がさかん。' },
+            { iso: "404", name: 'ケニア', lat: -0.0236, lng: 37.9062, zoom: 5, aliases: ['ケニア', 'けにあ', 'ケニア共和国'], trivia: 'インド洋に面する国。茶の生産がさかん。キリマンジャロ山のふもとのサバンナには野生動物がたくさん。' },
+            { iso: "710", name: '南アフリカ共和国', lat: -30.5595, lng: 22.9375, zoom: 5, aliases: ['南アフリカ共和国', 'みなみあふりかきょうわこく', '南アフリカ', 'みなみあふりか'], trivia: 'かつてイギリスの植民地だった。気候は温暖。1990年代に人種隔離政策であるアパルトヘイトが廃止された。' },
+            { iso: "682", name: 'サウジアラビア', lat: 23.8859, lng: 45.0792, zoom: 5, aliases: ['サウジアラビア', 'さうじあらびあ', 'サウジアラビア王国'], trivia: '原油の日本への輸出量1位。イスラム教徒はこの国の都市メッカの方向に礼拝をする。' },
+            { iso: "364", name: 'イラン', lat: 32.4279, lng: 53.6880, zoom: 5, aliases: ['イラン', 'いらん', 'ペルシャ', 'イラン・イスラム共和国', 'イランイスラム共和国'], trivia: 'かつて「ペルシャ」と呼んでいた国で、イスラム教シーア派が多数派である。女性は、体全体を覆うチャドルを着なければならない。' },
+            { iso: "586", name: 'パキスタン', lat: 30.3753, lng: 69.3451, zoom: 5, aliases: ['パキスタン', 'ぱきすたん', 'パキスタン・イスラム共和国', 'パキスタンイスラム共和国'], trivia: 'イスラム教を信仰する国。インダス川が流れ、約4000年前にインダス文明がさかえた。モヘンジョダロの遺跡が有名。' },
+            { iso: "356", name: 'インド', lat: 20.5937, lng: 78.9629, zoom: 4, aliases: ['インド', 'いんど', 'インド共和国'], trivia: '人口13億人で世界2位。ヒンドゥー教によるカースト制度が残っている。牛は神聖な動物。「カレー」を食べ、「サリー」を着る。' },
+            { iso: "524", name: 'ネパール', lat: 28.3949, lng: 84.1240, zoom: 6, aliases: ['ネパール', 'ねぱーる', 'ネパール連邦民主共和国'], trivia: '国旗が三角の形をしている。ヒマラヤ山脈がそびえる。エベレスト登山には約100万円の入山料を政府に支払うことが必要。' },
+            { iso: "496", name: 'モンゴル', lat: 46.8625, lng: 103.8467, zoom: 4, aliases: ['モンゴル', 'もんごる', 'モンゴル国'], trivia: '内陸国で、乾燥した草原。折りたたみ住居「ゲル」を使って、羊たちとの遊牧をしている。大相撲の力士にモンゴル出身者が多い。' },
+            { iso: "156", name: '中国', lat: 35.8617, lng: 104.1954, zoom: 3, aliases: ['中国', 'ちゅうごく', '中華人民共和国', 'ちゅうかじんみんきょうわこく'], trivia: '人口約14億人で世界1位の国。米と小麦の生産量世界1位「世界の工場」と呼ばれるほど工業製品の生産がさかんになっている。' },
+            { iso: "410", name: '韓国', lat: 35.9078, lng: 127.7669, zoom: 6, aliases: ['韓国', 'かんこく', '大韓民国', 'だいかんみんこく'], trivia: '福岡から1番近い国。床暖房はオンドル、民族衣装はチマ・チョゴリ、食べ物はキムチが有名な国。' },
+            { iso: "704", name: 'ベトナム', lat: 14.0583, lng: 108.2772, zoom: 5, aliases: ['ベトナム', 'べとなむ', 'ベトナム社会主義共和国'], trivia: '南北の国が統一された社会主義の国。日本はこの国から大量のえびを輸入している。米粉から作るフォーや民族衣装のアオザイが有名。' },
+            { iso: "458", name: 'マレーシア', lat: 4.2105, lng: 101.9758, zoom: 5, aliases: ['マレーシア', 'まれーしあ'], trivia: 'イスラム教徒が多い国。雨季にはスコールが降る。天然ガスを日本に多く輸出している。' },
+            { iso: "764", name: 'タイ', lat: 15.8700, lng: 100.9925, zoom: 5, aliases: ['タイ', 'たい', 'シャム', 'タイ王国'], trivia: '国の形が「ゾウの顔」。そして、ゾウを愛する国民。あいさつは手を合わせる「微笑みの国」。辛くて酸っぱいトムヤムクンが有名。' },
+            { iso: "702", name: 'シンガポール', lat: 1.3521, lng: 103.8198, zoom: 7, aliases: ['シンガポール', 'しんがぽーる', 'シンガポール共和国'], trivia: '小さな島国。国名は「ライオンの町」という意味。マーライオンが有名。「すばらしい街、罰金の街」という意味で「ファイン・シティ」。' },
+            { iso: "360", name: 'インドネシア', lat: -0.7893, lng: 113.9213, zoom: 4, aliases: ['インドネシア', 'いんどねしあ', 'インドネシア共和国'], trivia: '1万3000以上の島から成る島国。世界で一番イスラム教徒が多い国。日本に多く石炭を輸出している。バリ島はリゾート地として人気。' },
+            { iso: "608", name: 'フィリピン', lat: 12.8797, lng: 121.7740, zoom: 5, aliases: ['フィリピン', 'ふぃりぴん', 'フィリピン共和国'], trivia: 'スペイン植民地支配の影響を受け、キリスト教が多い。そして、アメリカ植民地支配の影響を受け、英語を話す島国。' },
+            { iso: "036", name: 'オーストラリア', lat: -25.2744, lng: 133.7751, zoom: 3, aliases: ['オーストラリア', 'おーすとらりあ', 'オーストラリア連邦'], trivia: '石炭、鉄鉱石の資源が多い。先住民族はアボリジニ。ウルル(エアーズロック)やグレートバリアリーフ、コアラ、カンガルーなど貴重な自然。' },
+            { iso: "554", name: 'ニュージーランド', lat: -40.9006, lng: 174.8860, zoom: 4, aliases: ['ニュージーランド', 'にゅーじーらんど'], trivia: '「羊の国」。先住民族はマオリ。ラグビー代表は「オールブラックス」と呼ばれ、強い。試合前に踊るハカは、マオリの伝統舞踊。' },
+            { iso: "124", name: 'カナダ', lat: 56.1304, lng: -106.3468, zoom: 3, aliases: ['カナダ', 'かなだ'], trivia: 'タイガと呼ばれる針葉樹林が多く、国旗に楓(カエデ)があり、メープルシロップが有名。公用語は英語とフランス語。面積世界2位の国。' },
+            { iso: "840", name: 'アメリカ', lat: 37.0902, lng: -95.7129, zoom: 3, aliases: ['アメリカ', 'あめりか', 'アメリカ合衆国', 'あめりかがっしゅうこく', '米国', 'べいこく'], trivia: '50の州から成り立つ人口3億人で世界3位。適地適作により「世界の食糧庫」。シリコンバレーの企業は、アップル、グーグルなど有名。' },
+            { iso: "484", name: 'メキシコ', lat: 23.6345, lng: -102.5528, zoom: 4, aliases: ['メキシコ', 'めきしこ', 'メキシコ合衆国', 'めきしこがっしゅうこく'], trivia: 'とうもろこしからつくるトルティーヤが主食。具を挟むとタコスになる。スペイン語を話す人が多い。' },
+            { iso: "170", name: 'コロンビア', lat: 4.5709, lng: -74.2973, zoom: 5, aliases: ['コロンビア', 'ころんびあ', 'コロンビア共和国'], trivia: 'コーヒー豆で有名。実は、花の輸出がさかんで、エメラルドも良くとれる。コロンブスにちなんで国名が付けられた。' },
+            { iso: "218", name: 'エクアドル', lat: -1.8312, lng: -78.1834, zoom: 6, aliases: ['エクアドル', 'えくあどる', 'エクアドル共和国'], trivia: '首都を赤道が通っており、国名の由来。日本はたくさんバナナを輸入している。大自然の宝庫、ガラパゴス諸島はこの国です。' },
+            { iso: "604", name: 'ペルー', lat: -9.1899, lng: -75.0152, zoom: 5, aliases: ['ペルー', 'ぺるー', 'ペルー共和国'], trivia: 'アンデス山脈にある国。高山気候で朝夕の気温差が大きく、人々はポンチョで調整。じゃがいも、トマト、かぼちゃ、唐辛子の原産国。' },
+            { iso: "152", name: 'チリ', lat: -35.6751, lng: -71.5430, zoom: 4, aliases: ['チリ', 'ちり', 'チリ共和国'], trivia: '南北に長〜い国。チュキカマタに代表される、銅の産出が多い。モアイ像で有名なイースター島がある。' },
+            { iso: "076", name: 'ブラジル', lat: -14.2350, lng: -51.9253, zoom: 4, aliases: ['ブラジル', 'ぶらじる', 'ブラジル連邦共和国'], trivia: 'アマゾン川周辺の熱帯雨林が開発され、バイオ燃料となるサトウキビ、他にも大豆、牛肉の生産が増加。リオのカーニバルが有名。' },
+            { iso: "032", name: 'アルゼンチン', lat: -38.4161, lng: -63.6167, zoom: 4, aliases: ['アルゼンチン', 'あるぜんちん', 'アルゼンチン共和国'], trivia: '気候は温暖。日本真裏にある国で、日本から最も遠い国。パンパと呼ばれる草原で牧畜がさかんで、牛肉の生産量は世界4位。' }
+        ];
+
+        let mapMode = '2d'; // '2d' or '3d'
+        let gameQuestions = [];
+        let currentQIndex = 0;
+        let score = 0;
+        let soundEnabled = true;
+        let isAnswered = false;
+        let recognition = null;
+        let isRecognizing = false;
+
+        // 教師用設定
+        let customQuestionCount = 20;
+        let priorityCountryIsos = new Set();
+
+        // D3.js マップ用変数
+        let worldGeoData = null;
+        let d3Svg, gOcean, gCountries, gVaticanMarker, d3Path;
+        let projection2D, projection3D;
+        let zoom2D, drag3D;
+        let currentRotation = [0, 0];
+        let currentTargetIso = null;
+        let minScale3D, maxScale3D, baseScale3D;
+        let initialPinchDistance = null;
+        let initialScaleOnPinch = null;
+
+        // Web Audio API による効果音生成
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        let audioCtx = null;
+
+        function ensureAudioContext() {
+            if (!audioCtx) {
+                audioCtx = new AudioContextClass();
+            }
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+        }
+
+        function playSound(type) {
+            if (!soundEnabled) return;
+            try {
+                ensureAudioContext();
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                const now = audioCtx.currentTime;
+
+                if (type === 'correct') {
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(660, now);
+                    osc.frequency.setValueAtTime(880, now + 0.12);
+                    gain.gain.setValueAtTime(0.3, now);
+                    gain.gain.exponentialRampToValueAtTime(0.01, now + 0.4);
+                    osc.start(now);
+                    osc.stop(now + 0.4);
+                } else if (type === 'wrong') {
+                    osc.type = 'sawtooth';
+                    osc.frequency.setValueAtTime(180, now);
+                    osc.frequency.setValueAtTime(90, now + 0.2);
+                    gain.gain.setValueAtTime(0.4, now);
+                    gain.gain.exponentialRampToValueAtTime(0.01, now + 0.5);
+                    osc.start(now);
+                    osc.stop(now + 0.5);
+                } else if (type === 'click') {
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(440, now);
+                    gain.gain.setValueAtTime(0.1, now);
+                    gain.gain.exponentialRampToValueAtTime(0.01, now + 0.05);
+                    osc.start(now);
+                    osc.stop(now + 0.05);
+                }
+            } catch (e) {
+                console.log("Audio play error:", e);
+            }
+        }
+
+        function toggleSound() {
+            soundEnabled = !soundEnabled;
+            const icon = document.getElementById('soundIcon');
+            icon.className = soundEnabled ? 'fa-solid fa-volume-high' : 'fa-solid fa-volume-xmark';
+        }
+
+        const SpeechRecognitionClass = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+        function initSpeechRecognition() {
+            if (!SpeechRecognitionClass) {
+                const voiceBtn = document.getElementById('voiceBtn');
+                if (voiceBtn) {
+                    voiceBtn.disabled = true;
+                    voiceBtn.classList.add('opacity-60', 'cursor-not-allowed');
+                    document.getElementById('voiceStatusText').innerText = '※お使いのブラウザは音声入力非対応です';
+                }
+            }
+        }
+
+        function toggleVoiceRecognition() {
+            playSound('click');
+            if (!SpeechRecognitionClass) {
+                alert('お使いのブラウザは音声認識に対応していません。Google Chrome等の最新ブラウザをご利用いただくか、キーボードで入力してください。');
+                return;
+            }
+
+            if (isRecognizing) {
+                if (recognition) {
+                    try { recognition.stop(); } catch (e) {}
+                }
+                stopVoiceRecognition();
+                return;
+            }
+
+            try {
+                if (recognition) {
+                    try { recognition.abort(); } catch (e) {}
+                }
+
+                recognition = new SpeechRecognitionClass();
+                recognition.lang = 'ja-JP';
+                recognition.continuous = false;
+                recognition.interimResults = false;
+                recognition.maxAlternatives = 1;
+
+                recognition.onstart = () => {
+                    isRecognizing = true;
+                    const voiceBtn = document.getElementById('voiceBtn');
+                    const voiceStatusText = document.getElementById('voiceStatusText');
+                    if (voiceBtn) {
+                        voiceBtn.className = 'w-full bg-rose-50 border-2 border-rose-500 text-rose-700 font-bold py-3.5 px-4 rounded-xl transition flex items-center justify-center gap-2 animate-pulse shadow';
+                    }
+                    if (voiceStatusText) {
+                        voiceStatusText.innerText = '音声聞き取り中...（国名を話してください）';
+                    }
+                };
+
+                recognition.onresult = (event) => {
+                    if (event.results && event.results[0] && event.results[0][0]) {
+                        let text = event.results[0][0].transcript || '';
+                        // 句読点、空白、語尾の丁寧語等を除去してサニタイズ
+                        text = text.replace(/[。、！？\.\,\s]/g, '');
+                        text = text.replace(/(です|でした|だよ|だ)$/, '');
+                        
+                        const inputEl = document.getElementById('answerInput');
+                        if (inputEl) {
+                            inputEl.value = text;
+                        }
+                        stopVoiceRecognition();
+                        checkAnswer();
+                    }
+                };
+
+                recognition.onerror = (event) => {
+                    console.warn("Speech recognition error:", event.error);
+                    stopVoiceRecognition();
+                    const voiceStatusText = document.getElementById('voiceStatusText');
+                    if (!voiceStatusText) return;
+
+                    if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+                        voiceStatusText.innerText = '⚠️ マイク許可が必要です（キーボード入力推奨）';
+                    } else if (event.error === 'no-speech') {
+                        voiceStatusText.innerText = '声が聞き取れませんでした（もう一度押してください）';
+                    } else if (event.error === 'network') {
+                        voiceStatusText.innerText = 'ネットワーク接続を確認してください';
+                    } else {
+                        voiceStatusText.innerText = '音声認識できませんでした（再試行してください）';
+                    }
+
+                    setTimeout(() => {
+                        if (!isRecognizing && voiceStatusText) {
+                            voiceStatusText.innerText = '音声で答える（マイク起動）';
+                        }
+                    }, 4000);
+                };
+
+                recognition.onend = () => {
+                    stopVoiceRecognition();
+                };
+
+                recognition.start();
+            } catch (err) {
+                console.error("Speech recognition start failed:", err);
+                stopVoiceRecognition();
+                const voiceStatusText = document.getElementById('voiceStatusText');
+                if (voiceStatusText) {
+                    voiceStatusText.innerText = 'マイク起動に失敗しました（キーボードをお使いください）';
+                }
+            }
+        }
+
+        function stopVoiceRecognition() {
+            isRecognizing = false;
+            const btn = document.getElementById('voiceBtn');
+            const voiceStatusText = document.getElementById('voiceStatusText');
+            if (btn) {
+                btn.className = 'w-full bg-slate-100 hover:bg-emerald-50 text-slate-700 hover:text-emerald-700 border-2 border-slate-200 hover:border-emerald-400 font-bold py-3.5 px-4 rounded-xl transition flex items-center justify-center gap-2 shadow-sm';
+            }
+            if (voiceStatusText && voiceStatusText.innerText.includes('聞き取り中')) {
+                voiceStatusText.innerText = '音声で答える（マイク起動）';
+            }
+        }
+
+        async function initD3Map() {
+            const svgEl = d3.select("#d3MapSvg");
+            d3Svg = svgEl;
+
+            const container = svgEl.node().parentElement;
+            const width = container.clientWidth || 600;
+            const height = container.clientHeight || 450;
+
+            svgEl.attr("viewBox", `0 0 ${width} ${height}`);
+
+            // レイヤーグループ作成（バチカンマーカーはgCountries内に作成しズームに完全連動）
+            gOcean = svgEl.append("g").attr("class", "map-ocean");
+            gCountries = svgEl.append("g").attr("class", "map-countries");
+            gVaticanMarker = gCountries.append("g").attr("class", "map-vatican-marker");
+
+            // 投影法の定義
+            projection2D = d3.geoMercator()
+                .scale(width / (2 * Math.PI) * 0.85)
+                .translate([width / 2, height / 1.5]);
+
+            baseScale3D = Math.min(width, height) / 2.3;
+            minScale3D = baseScale3D * 0.5;
+            maxScale3D = baseScale3D * 4;
+
+            projection3D = d3.geoOrthographic()
+                .scale(baseScale3D)
+                .translate([width / 2, height / 2])
+                .clipAngle(90);
+
+            // 2D用ズーム＆パン
+            zoom2D = d3.zoom()
+                .scaleExtent([1, 8])
+                .on("zoom", (event) => {
+                    if (mapMode === '2d') {
+                        gCountries.attr("transform", event.transform);
+                    }
+                });
+
+            // 3D用ドラッグ回転
+            drag3D = d3.drag()
+                .on("drag", (event) => {
+                    if (mapMode === '3d') {
+                        const rotate = projection3D.rotate();
+                        const k = 75 / projection3D.scale();
+                        currentRotation = [rotate[0] + event.dx * k, rotate[1] - event.dy * k];
+                        projection3D.rotate(currentRotation);
+                        updateD3Paths();
+                    }
+                });
+
+            // 3D用ホイールスクロール拡大縮小
+            svgEl.on("wheel.3d", (event) => {
+                if (mapMode !== '3d') return;
+                event.preventDefault();
+                const factor = event.deltaY < 0 ? 1.12 : 0.88;
+                const currentScale = projection3D.scale();
+                const newScale = Math.max(minScale3D, Math.min(maxScale3D, currentScale * factor));
+                projection3D.scale(newScale);
+                updateD3Paths();
+            }, { passive: false });
+
+            // 3D用ピンチズーム（タブレット・モバイル対応）
+            svgEl.on("touchstart.3d", (event) => {
+                if (mapMode !== '3d') return;
+                if (event.touches && event.touches.length === 2) {
+                    const dx = event.touches[0].clientX - event.touches[1].clientX;
+                    const dy = event.touches[0].clientY - event.touches[1].clientY;
+                    initialPinchDistance = Math.hypot(dx, dy);
+                    initialScaleOnPinch = projection3D.scale();
+                }
+            });
+
+            svgEl.on("touchmove.3d", (event) => {
+                if (mapMode !== '3d') return;
+                if (event.touches && event.touches.length === 2 && initialPinchDistance) {
+                    event.preventDefault();
+                    const dx = event.touches[0].clientX - event.touches[1].clientX;
+                    const dy = event.touches[0].clientY - event.touches[1].clientY;
+                    const currentDistance = Math.hypot(dx, dy);
+                    const factor = currentDistance / initialPinchDistance;
+                    const newScale = Math.max(minScale3D, Math.min(maxScale3D, initialScaleOnPinch * factor));
+                    projection3D.scale(newScale);
+                    updateD3Paths();
+                }
+            });
+
+            svgEl.on("touchend.3d", (event) => {
+                if (mapMode !== '3d') return;
+                if (!event.touches || event.touches.length < 2) {
+                    initialPinchDistance = null;
+                    initialScaleOnPinch = null;
+                }
+            });
+
+            svgEl.call(zoom2D);
+
+            // TopoJSON データのロード
+            try {
+                const res = await fetch('https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json');
+                const topoData = await res.json();
+                worldGeoData = topojson.feature(topoData, topoData.objects.countries);
+                renderD3Countries();
+            } catch (e) {
+                console.error("D3 Map TopoJSON load error:", e);
+            }
+        }
+
+        function renderD3Countries() {
+            if (!worldGeoData) return;
+
+            const activeProjection = (mapMode === '3d') ? projection3D : projection2D;
+            d3Path = d3.geoPath().projection(activeProjection);
+
+            // 3Dモード用の海洋球体描画
+            gOcean.selectAll("*").remove();
+            if (mapMode === '3d') {
+                gOcean.append("path")
+                    .datum({ type: "Sphere" })
+                    .attr("class", "sphere-ocean")
+                    .attr("d", d3Path);
+            }
+
+            // 国パスの描画
+            const paths = gCountries.selectAll(".country-path")
+                .data(worldGeoData.features, d => d.id);
+
+            paths.enter()
+                .append("path")
+                .attr("class", "country-path")
+                .attr("data-id", d => String(d.id).padStart(3, '0'))
+                .merge(paths)
+                .attr("d", d3Path);
+
+            if (currentTargetIso) {
+                highlightCountryInD3(currentTargetIso);
+            }
+        }
+
+        function updateD3Paths() {
+            if (!worldGeoData) return;
+            const activeProjection = (mapMode === '3d') ? projection3D : projection2D;
+            d3Path = d3.geoPath().projection(activeProjection);
+
+            if (mapMode === '3d') {
+                gOcean.select(".sphere-ocean").attr("d", d3Path);
+            }
+
+            gCountries.selectAll(".country-path").attr("d", d3Path);
+            updateVaticanMarker(activeProjection);
+        }
+
+        function updateVaticanMarker(projection) {
+            if (!gVaticanMarker) return;
+            gVaticanMarker.selectAll("*").remove();
+
+            if (currentTargetIso === "336") { // バチカン市国
+                const vaticanLngLat = [12.4534, 41.9029]; // ローマ位置
+                
+                // 3Dモードで地球の裏側に回った場合の非表示判定
+                if (mapMode === '3d') {
+                    const center = [-projection.rotate()[0], -projection.rotate()[1]];
+                    const distance = d3.geoDistance(vaticanLngLat, center);
+                    if (distance > Math.PI / 2) return;
+                }
+
+                const coords = projection(vaticanLngLat);
+                if (!coords || isNaN(coords[0]) || isNaN(coords[1])) return;
+
+                const [cx, cy] = coords;
+
+                // ローマ位置に半径1pxの最前面赤点滅ドットを表示
+                const romeGroup = gVaticanMarker.append("g")
+                    .attr("class", "rome-blinking-group")
+                    .attr("transform", `translate(${cx}, ${cy})`);
+
+                romeGroup.append("circle")
+                    .attr("r", 1)
+                    .attr("fill", "#ef4444")
+                    .attr("stroke", "#ffffff")
+                    .attr("stroke-width", 0.5);
+
+                gVaticanMarker.raise();
+            }
+        }
+
+        function highlightCountryInD3(isoCode) {
+            currentTargetIso = isoCode;
+            if (!d3Svg) return;
+
+            gCountries.selectAll(".target-country-highlight")
+                .classed("target-country-highlight", false);
+
+            if (isoCode !== "336") { // バチカン市国時はイタリア全体を赤くしない
+                const targetIsoPadded = String(isoCode).padStart(3, '0');
+                const targetPath = gCountries.select(`path[data-id="${targetIsoPadded}"]`);
+
+                if (!targetPath.empty()) {
+                    targetPath.classed("target-country-highlight", true);
+                    targetPath.raise();
+                }
+            }
+
+            const activeProjection = (mapMode === '3d') ? projection3D : projection2D;
+            updateVaticanMarker(activeProjection);
+        }
+
+        function focusOnCountryInD3(target) {
+            highlightCountryInD3(target.iso);
+
+            if (mapMode === '3d') {
+                d3.transition()
+                    .duration(1000)
+                    .tween("rotate", () => {
+                        const r = d3.interpolate(projection3D.rotate(), [-target.lng, -target.lat]);
+                        return (t) => {
+                            projection3D.rotate(r(t));
+                            currentRotation = r(t);
+                            updateD3Paths();
+                        };
+                    });
+            } else {
+                const [x, y] = projection2D([target.lng, target.lat]);
+                const svgNode = d3Svg.node();
+                const width = svgNode.clientWidth || 600;
+                const height = svgNode.clientHeight || 450;
+                const scale = Math.min(target.zoom || 3, 5);
+
+                d3Svg.transition()
+                    .duration(800)
+                    .call(zoom2D.transform, d3.zoomIdentity
+                        .translate(width / 2, height / 2)
+                        .scale(scale)
+                        .translate(-x, -y)
+                    );
+            }
+        }
+
+        function switchMapMode(mode) {
+            playSound('click');
+            mapMode = mode;
+
+            const btn2D = document.getElementById('mapMode2D');
+            const btn3D = document.getElementById('mapMode3D');
+
+            if (mode === '2d') {
+                btn2D.className = 'px-3 py-1.5 rounded-lg text-xs font-black transition flex items-center gap-1 bg-indigo-600 text-white shadow';
+                btn3D.className = 'px-3 py-1.5 rounded-lg text-xs font-black transition flex items-center gap-1 bg-slate-100 text-slate-700 hover:bg-slate-200';
+                
+                d3Svg.on(".drag", null);
+                d3Svg.call(zoom2D);
+                gCountries.attr("transform", null);
+                d3Svg.style("background-color", "#bae6fd");
+            } else {
+                btn3D.className = 'px-3 py-1.5 rounded-lg text-xs font-black transition flex items-center gap-1 bg-indigo-600 text-white shadow';
+                btn2D.className = 'px-3 py-1.5 rounded-lg text-xs font-black transition flex items-center gap-1 bg-slate-100 text-slate-700 hover:bg-slate-200';
+                
+                d3Svg.on(".zoom", null);
+                d3Svg.call(drag3D);
+                gCountries.attr("transform", null);
+                d3Svg.style("background-color", "#0f172a");
+            }
+
+            renderD3Countries();
+
+            if (gameQuestions.length > 0 && currentQIndex < gameQuestions.length) {
+                focusOnCountryInD3(gameQuestions[currentQIndex]);
+            }
+        }
+
+        function showHomeMenu() {
+            playSound('click');
+            document.getElementById('homeScreen').classList.remove('hidden');
+            document.getElementById('gameScreen').classList.add('hidden');
+            document.getElementById('gameOverScreen').classList.add('hidden');
+            document.getElementById('resultScreen').classList.add('hidden');
+        }
+
+        function updateUIDisplays() {
+            document.querySelectorAll('.totalQNumDisplay').forEach(el => {
+                el.innerText = customQuestionCount;
+            });
+            document.getElementById('startBtnText').innerText = `${customQuestionCount}問チャレンジスタート！`;
+        }
+
+        function startGame() {
+            playSound('click');
+            
+            // 出題選定ロジック（優先指定国の確実な選定 ＋ 残りをランダム抽出）
+            let priorityList = countriesData.filter(c => priorityCountryIsos.has(c.iso));
+            priorityList = priorityList.sort(() => 0.5 - Math.random());
+
+            let nonPriorityList = countriesData.filter(c => !priorityCountryIsos.has(c.iso));
+            nonPriorityList = nonPriorityList.sort(() => 0.5 - Math.random());
+
+            let selected = [...priorityList, ...nonPriorityList].slice(0, customQuestionCount);
+            gameQuestions = selected.sort(() => 0.5 - Math.random());
+
+            currentQIndex = 0;
+            score = 0;
+
+            updateUIDisplays();
+
+            document.getElementById('scoreDisplay').innerText = '0';
+            document.getElementById('homeScreen').classList.add('hidden');
+            document.getElementById('gameOverScreen').classList.add('hidden');
+            document.getElementById('resultScreen').classList.add('hidden');
+            document.getElementById('gameScreen').classList.remove('hidden');
+
+            loadQuestion();
+        }
+
+        function loadQuestion() {
+            if (currentQIndex >= gameQuestions.length) {
+                finishGameSuccess();
+                return;
+            }
+
+            isAnswered = false;
+            document.getElementById('feedbackBox').classList.add('hidden');
+            document.getElementById('currentQNum').innerText = currentQIndex + 1;
+            document.getElementById('remainingQCount').innerText = gameQuestions.length - (currentQIndex + 1);
+
+            const inputEl = document.getElementById('answerInput');
+            inputEl.value = '';
+            inputEl.disabled = false;
+            inputEl.focus();
+
+            const target = gameQuestions[currentQIndex];
+            focusOnCountryInD3(target);
+        }
+
+        function handleFormSubmit(e) {
+            if (e) e.preventDefault();
+            if (isAnswered) return;
+            checkAnswer();
+        }
+
+        function checkAnswer() {
+            if (isAnswered) return;
+            const inputEl = document.getElementById('answerInput');
+            const rawInput = inputEl.value.trim();
+            if (!rawInput) return;
+
+            const target = gameQuestions[currentQIndex];
+            const cleanInput = rawInput.toLowerCase().replace(/\s+/g, '');
+
+            const normalizedInput = cleanInput
+                .replace(/[。、！？\.\,\s]/g, '')
+                .replace(/(です|でした|だよ|だ)$/, '');
+
+            const isCorrect = target.aliases.some(alias => {
+                const cleanAlias = alias.toLowerCase().replace(/\s+/g, '');
+                return cleanAlias === normalizedInput || cleanAlias === cleanInput;
+            });
+
+            isAnswered = true;
+            inputEl.disabled = true;
+
+            if (isCorrect) {
+                score++;
+                document.getElementById('scoreDisplay').innerText = score;
+                playSound('correct');
+
+                const feedbackBox = document.getElementById('feedbackBox');
+                document.getElementById('feedbackResult').innerHTML = '<i class="fa-solid fa-circle-check text-emerald-600"></i> 正解！';
+                document.getElementById('feedbackDetail').innerText = `${target.name}：${target.trivia}`;
+
+                const nextBtn = document.getElementById('nextBtn');
+                if (currentQIndex === gameQuestions.length - 1) {
+                    nextBtn.innerHTML = '結果を見る <i class="fa-solid fa-trophy"></i>';
+                } else {
+                    const remaining = gameQuestions.length - (currentQIndex + 1);
+                    nextBtn.innerHTML = `次の問題へ (あと <span id="remainingQCount">${remaining}</span> 問) <i class="fa-solid fa-arrow-right"></i>`;
+                }
+
+                feedbackBox.classList.remove('hidden');
+            } else {
+                playSound('wrong');
+                showGameOver(rawInput, target);
+            }
+        }
+
+        function nextQuestion() {
+            playSound('click');
+            currentQIndex++;
+            if (currentQIndex >= gameQuestions.length) {
+                finishGameSuccess();
+            } else {
+                loadQuestion();
+            }
+        }
+
+        function showGameOver(userInput, target) {
+            document.getElementById('gameScreen').classList.add('hidden');
+            document.getElementById('gameOverScreen').classList.remove('hidden');
+
+            document.getElementById('failedQNum').innerText = currentQIndex + 1;
+            document.getElementById('correctAnswerName').innerText = target.name;
+            document.getElementById('userWrongAnswer').innerText = userInput || '（未入力）';
+            document.getElementById('failedTrivia').innerText = `【解説】${target.trivia}`;
+        }
+
+        function finishGameSuccess() {
+            document.getElementById('gameScreen').classList.add('hidden');
+            document.getElementById('resultScreen').classList.remove('hidden');
+            playSound('correct');
+            if (typeof confetti === 'function') {
+                confetti({
+                    particleCount: 120,
+                    spread: 80,
+                    origin: { y: 0.6 }
+                });
+            }
+        }
+
+        function openTeacherAuthModal() {
+            playSound('click');
+            document.getElementById('teacherPassInput').value = '';
+            document.getElementById('authErrorMsg').classList.add('hidden');
+            document.getElementById('teacherAuthModal').classList.remove('hidden');
+            document.getElementById('teacherPassInput').focus();
+        }
+
+        function closeTeacherAuthModal() {
+            document.getElementById('teacherAuthModal').classList.add('hidden');
+        }
+
+        function handleTeacherAuth(e) {
+            e.preventDefault();
+            const pass = document.getElementById('teacherPassInput').value;
+            if (pass === '1234') {
+                playSound('correct');
+                closeTeacherAuthModal();
+                openTeacherConfigModal();
+            } else {
+                playSound('wrong');
+                document.getElementById('authErrorMsg').classList.remove('hidden');
+            }
+        }
+
+        function openTeacherConfigModal() {
+            document.getElementById('qCountRange').value = customQuestionCount;
+            document.getElementById('qCountValue').innerText = customQuestionCount;
+            renderCountrySelectionGrid();
+            updatePriorityCountBadge();
+            document.getElementById('teacherConfigModal').classList.remove('hidden');
+        }
+
+        function closeTeacherConfigModal() {
+            document.getElementById('teacherConfigModal').classList.add('hidden');
+        }
+
+        function updateQCountValue(val) {
+            customQuestionCount = parseInt(val, 10);
+            document.getElementById('qCountValue').innerText = customQuestionCount;
+            document.getElementById('maxPriorityDisplay').innerText = customQuestionCount;
+            updatePriorityCountBadge();
+        }
+
+        function renderCountrySelectionGrid() {
+            const grid = document.getElementById('countriesSelectionGrid');
+            grid.innerHTML = '';
+
+            countriesData.forEach(country => {
+                const isSelected = priorityCountryIsos.has(country.iso);
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = `p-2 rounded-xl text-xs font-bold text-left border transition flex items-center justify-between ${
+                    isSelected 
+                        ? 'bg-rose-50 border-rose-400 text-rose-800 shadow-sm' 
+                        : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-100'
+                }`;
+                btn.onclick = () => togglePriorityCountry(country.iso);
+                btn.innerHTML = `
+                    <span class="truncate">${country.name}</span>
+                    <i class="fa-solid ${isSelected ? 'fa-thumbtack text-rose-500' : 'fa-plus text-slate-300'} text-xs"></i>
+                `;
+                grid.appendChild(btn);
+            });
+        }
+
+        function togglePriorityCountry(iso) {
+            playSound('click');
+            if (priorityCountryIsos.has(iso)) {
+                priorityCountryIsos.delete(iso);
+            } else {
+                priorityCountryIsos.add(iso);
+            }
+            renderCountrySelectionGrid();
+            updatePriorityCountBadge();
+        }
+
+        function selectAllPriorityCountries() {
+            playSound('click');
+            countriesData.forEach(c => priorityCountryIsos.add(c.iso));
+            renderCountrySelectionGrid();
+            updatePriorityCountBadge();
+        }
+
+        function clearAllPriorityCountries() {
+            playSound('click');
+            priorityCountryIsos.clear();
+            renderCountrySelectionGrid();
+            updatePriorityCountBadge();
+        }
+
+        function updatePriorityCountBadge() {
+            const count = priorityCountryIsos.size;
+            document.getElementById('priorityCountBadge').innerText = count;
+            document.getElementById('maxPriorityDisplay').innerText = customQuestionCount;
+        }
+
+        function saveTeacherConfig() {
+            playSound('correct');
+            updateUIDisplays();
+            closeTeacherConfigModal();
+        }
+
+        window.addEventListener('resize', () => {
+            if (d3Svg) {
+                const container = d3Svg.node().parentElement;
+                const width = container.clientWidth || 600;
+                const height = container.clientHeight || 450;
+                d3Svg.attr("viewBox", `0 0 ${width} ${height}`);
+                if (mapMode === '2d') {
+                    projection2D.scale(width / (2 * Math.PI) * 0.85).translate([width / 2, height / 1.5]);
+                } else {
+                    baseScale3D = Math.min(width, height) / 2.3;
+                    projection3D.translate([width / 2, height / 2]);
+                }
+                updateD3Paths();
+            }
+        });
+
+        window.onload = function() {
+            initSpeechRecognition();
+            initD3Map();
+            updateUIDisplays();
+        };
+    </script>
+</body>
+</html>

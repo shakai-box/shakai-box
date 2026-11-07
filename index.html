@@ -517,6 +517,7 @@
         let isAnswered = false;
         let recognition = null;
         let isRecognizing = false;
+        let inputMode = 'typing'; // 'typing' または 'voice' （直前の入力方法を維持）
 
         // 教師用設定
         let customQuestionCount = 20;
@@ -612,12 +613,20 @@
             }
 
             if (isRecognizing) {
+                inputMode = 'typing';
                 if (recognition) {
                     try { recognition.stop(); } catch (e) {}
                 }
                 stopVoiceRecognition();
                 return;
             }
+
+            inputMode = 'voice';
+            startVoiceListening();
+        }
+
+        function startVoiceListening() {
+            if (!SpeechRecognitionClass || isAnswered) return;
 
             try {
                 if (recognition) {
@@ -666,17 +675,21 @@
 
                     if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
                         voiceStatusText.innerText = '⚠️ マイク許可が必要です（キーボード入力推奨）';
+                        inputMode = 'typing';
                     } else if (event.error === 'no-speech') {
-                        voiceStatusText.innerText = '声が聞き取れませんでした（もう一度押してください）';
+                        voiceStatusText.innerText = '声が聞き取れませんでした（タップして再開）';
                     } else if (event.error === 'network') {
                         voiceStatusText.innerText = 'ネットワーク接続を確認してください';
+                        inputMode = 'typing';
                     } else {
                         voiceStatusText.innerText = '音声認識できませんでした（再試行してください）';
                     }
 
                     setTimeout(() => {
                         if (!isRecognizing && voiceStatusText) {
-                            voiceStatusText.innerText = '音声で答える（マイク起動）';
+                            voiceStatusText.innerText = inputMode === 'voice' 
+                                ? '音声入力モード待機中（タップして再開）' 
+                                : '音声で答える（マイク起動）';
                         }
                     }, 4000);
                 };
@@ -693,6 +706,20 @@
                 if (voiceStatusText) {
                     voiceStatusText.innerText = 'マイク起動に失敗しました（キーボードをお使いください）';
                 }
+            }
+        }
+
+        function stopVoiceRecognition() {
+            isRecognizing = false;
+            const btn = document.getElementById('voiceBtn');
+            const voiceStatusText = document.getElementById('voiceStatusText');
+            if (btn) {
+                btn.className = 'w-full bg-slate-100 hover:bg-emerald-50 text-slate-700 hover:text-emerald-700 border-2 border-slate-200 hover:border-emerald-400 font-bold py-3.5 px-4 rounded-xl transition flex items-center justify-center gap-2 shadow-sm';
+            }
+            if (voiceStatusText && voiceStatusText.innerText.includes('聞き取り中')) {
+                voiceStatusText.innerText = inputMode === 'voice'
+                    ? '音声入力モード（タップで手動起動）'
+                    : '音声で答える（マイク起動）';
             }
         }
 
@@ -994,6 +1021,7 @@
 
         function startGame() {
             playSound('click');
+            inputMode = 'typing'; // ゲーム開始時はタイピングを初期値にリセット
             
             // 出題選定ロジック（優先指定国の確実な選定 ＋ 残りをランダム抽出）
             let priorityList = countriesData.filter(c => priorityCountryIsos.has(c.iso));
@@ -1033,15 +1061,32 @@
             const inputEl = document.getElementById('answerInput');
             inputEl.value = '';
             inputEl.disabled = false;
-            inputEl.focus();
 
             const target = gameQuestions[currentQIndex];
             focusOnCountryInD3(target);
+
+            // 前回の入力モード（音声 または タイピング）を自動適用
+            if (inputMode === 'voice') {
+                // 音声認識の起動（マイク許可済みの場合自動でリスニング開始）
+                setTimeout(() => {
+                    if (!isAnswered && inputMode === 'voice') {
+                        startVoiceListening();
+                    }
+                }, 300);
+            } else {
+                inputEl.focus();
+            }
         }
 
         function handleFormSubmit(e) {
             if (e) e.preventDefault();
             if (isAnswered) return;
+            // タイピングまたは送信ボタンが使われたのでタイピングモードをデフォルトに更新
+            inputMode = 'typing';
+            if (isRecognizing && recognition) {
+                try { recognition.abort(); } catch (err) {}
+                stopVoiceRecognition();
+            }
             checkAnswer();
         }
 
@@ -1246,6 +1291,27 @@
             initSpeechRecognition();
             initD3Map();
             updateUIDisplays();
+
+            // 入力欄にフォーカスまたはキー入力された場合はタイピングモードに戻す
+            const inputEl = document.getElementById('answerInput');
+            if (inputEl) {
+                inputEl.addEventListener('focus', () => {
+                    if (inputMode === 'voice') {
+                        inputMode = 'typing';
+                        if (isRecognizing && recognition) {
+                            try { recognition.abort(); } catch (err) {}
+                            stopVoiceRecognition();
+                        }
+                    }
+                });
+                inputEl.addEventListener('input', () => {
+                    inputMode = 'typing';
+                    if (isRecognizing && recognition) {
+                        try { recognition.abort(); } catch (err) {}
+                        stopVoiceRecognition();
+                    }
+                });
+            }
         };
 
         // 正解後に任意のキーボード入力で次へ進むイベントリスナー
